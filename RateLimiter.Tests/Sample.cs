@@ -159,5 +159,49 @@ namespace RateLimiter.Tests
 
             await Task.WhenAll(tasks.ToArray());
         }
+
+        //[Fact(Skip = "for demo purpose only")]
+        [Fact]
+        public async Task ShouldBeAbleToContinueAfterCancelation()
+        {
+            var constraint1 = new CountByIntervalAwaitableConstraint(1, TimeSpan.FromSeconds(1));
+            var constraint2 = new CountByIntervalAwaitableConstraint(10, TimeSpan.FromMinutes(1));
+            var timeConstraint = TimeLimiter.Compose(constraint1, constraint2);
+
+            Func<CancellationToken, Task> fun = async (token) =>
+            {
+                await timeConstraint.Enqueue(async () =>
+                {
+                    ConsoleIt();
+                }, token);
+            };
+
+            var cts = new CancellationTokenSource(100);
+
+            try
+            {
+                await Task.WhenAll(fun(cts.Token), fun(cts.Token));
+                // task 1 executed immediately
+                // task 2 waiting for constraint1 (constraint2 return new DisposeAction(OnEnded);) 
+            }
+
+            catch
+            {
+                // when cancellation happend DisposeAction for task 2 wont be call, and _Semaphore wont be released
+                ;
+            }
+
+            cts.Dispose();
+            cts = new CancellationTokenSource(60000); // 1 min to not cancelled on brake point - for test could be e.g. 5s
+
+            // in this place deadlock occurs on CountByIntervalAwaitableConstraint:
+            // public async Task<IDisposable> WaitForReadiness(CancellationToken cancellationToken)
+            // {
+            //      await _Semaphore.WaitAsync(cancellationToken); <- this semaphore is not released
+            Func<Task> t = async () => await Task.WhenAll(fun(cts.Token), fun(cts.Token));
+            await t.Should().NotThrowAsync();
+            cts.IsCancellationRequested.Should().BeFalse();
+            cts.Dispose();
+        }
     }
 }
